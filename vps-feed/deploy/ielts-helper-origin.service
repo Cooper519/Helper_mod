@@ -1,0 +1,21 @@
+[Unit]
+Description=IELTS 订阅服务的回环 HTTPS 入口
+After=ielts-helper-feed.service
+
+[Service]
+DynamicUser=yes
+StateDirectory=ielts-helper-origin
+StateDirectoryMode=0700
+Environment=XDG_DATA_HOME=/var/lib/ielts-helper-origin
+Environment=XDG_CONFIG_HOME=/var/lib/ielts-helper-origin/config
+ExecStart=/usr/local/bin/caddy run --config /etc/ielts-helper-origin/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

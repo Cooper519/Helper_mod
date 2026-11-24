@@ -1,0 +1,16 @@
+# 单独的回环实例；不使用主站的管理端口、证书目录或系统信任库。
+{
+	admin off
+	persist_config off
+	auto_https disable_redirects
+	skip_install_trust
+	servers {
+		protocols h1 h2
+	}
+}
+
+https://localhost:28474 {
+	bind 127.0.0.1
+	tls internal
+	reverse_proxy 127.0.0.1:28473
+}

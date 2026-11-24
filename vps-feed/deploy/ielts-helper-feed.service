@@ -1,0 +1,22 @@
+[Unit]
+Description=IELTS Helper 订阅与下载代理
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ielts-feed
+Group=ielts-feed
+EnvironmentFile=/etc/ielts-helper-feed.env
+ExecStart=/opt/ielts-helper-feed/ielts-helper-feed
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

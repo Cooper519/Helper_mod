@@ -1,0 +1,28 @@
+# 本地工具、依赖、运行数据与凭据不随集成源码提交。
+node_modules/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+/vps-feed/.tools/
+/vps-feed/ielts-helper-feed
+/vps-feed/*.exe
+# 公开仓只保存可分发组件。内部规格、实机证据及工作流留在本地。
+/.agents/
+/.myflow/
+/AGENTS.md
+/docs/
+/review.md
+/README.local.md
+/obsidian-plugin/verification.md
+/obsidian-plugin/work.md
+/vps-feed/VERIFICATION.md
+/.dsh/
+/.gemini/
+/.playwright-mcp/
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key

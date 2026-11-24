@@ -1,0 +1,7 @@
+.tools/
+ielts-helper-feed
+ielts-helper-feed.exe
+*.test
+*.test.exe
+config.local.json
+*.env
