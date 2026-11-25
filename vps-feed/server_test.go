@@ -91,7 +91,7 @@ func fixture(t *testing.T, dir string) (*Feed, *atomic.Int64) {
 	for n := range files {
 		if strings.HasPrefix(n, "ielts-helper-resources-") && strings.HasSuffix(n, ".zip") {
 			resourceName = n
-		} else if strings.HasPrefix(n, "ielts-helper-") && strings.HasSuffix(n, ".zip") {
+		} else if strings.HasPrefix(n, "ielts-helper-") && !strings.HasPrefix(n, "ielts-helper-light-") && strings.HasSuffix(n, ".zip") {
 			helperName = n
 		}
 	}
@@ -100,7 +100,11 @@ func fixture(t *testing.T, dir string) (*Feed, *atomic.Int64) {
 	}
 	hv := strings.TrimSuffix(strings.TrimPrefix(helperName, "ielts-helper-"), ".zip")
 	rv := strings.TrimSuffix(strings.TrimPrefix(resourceName, "ielts-helper-resources-"), ".zip")
-	hr := []release{mk("v"+hv, "minPluginVersion: 2.0.0\nrecommendedPluginVersion: 2.0.0", []string{helperName}), mk("resources-v"+rv, "audioMode: on-demand", []string{resourceName})}
+	programs := []string{helperName}
+	if light := "ielts-helper-light-" + hv + ".zip"; files[light] != nil {
+		programs = append(programs, light)
+	}
+	hr := []release{mk("v"+hv, "minPluginVersion: 2.0.0\nrecommendedPluginVersion: 2.0.0", programs), mk("resources-v"+rv, "audioMode: on-demand", []string{resourceName})}
 	// 有真实轻量构建产物时直接采用发布者正文与校验和，不用测试默认值替换。
 	if notes := files["release-notes-helper-"+hv+".md"]; len(notes) > 0 {
 		hr[0].Body = string(notes)
@@ -243,6 +247,45 @@ func TestExactTagDownload(t *testing.T) {
 	w := request(f, "/download/helper/4.0.0/ielts-helper-4.0.0.zip", f.cfg.AccessToken)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+// 旧包和轻量包留在同一标签：清单、缓存和按标签回查都必须指向相同的轻量字节。
+func TestDualProgramRelease(t *testing.T) {
+	dir := t.TempDir()
+	const standard = "ielts-helper-3.8.0.zip"
+	const light = "ielts-helper-light-3.8.0.zip"
+	for name, body := range map[string]string{"manifest.json": `{"version":"2.0.0"}`, "main.js": "代码", "styles.css": "样式", standard: "传统程序", light: "轻量", "ielts-helper-resources-1.2.3.zip": "资源"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ := fixture(t, dir)
+	m, err := f.manifest(context.Background(), "github", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := m.Manifest.Helper.Asset
+	key := "helper/3.8.0/" + standard
+	if a.Filename != standard || a.URL != "/download/"+key || a.SHA != fmt.Sprintf("%x", sha256.Sum256([]byte("轻量"))) || a.Size != int64(len("轻量")) {
+		t.Fatalf("未映射为轻量附件：%+v", a)
+	}
+	for i := 0; i < 2; i++ {
+		w := request(f, a.URL+"?source=github", f.cfg.AccessToken)
+		if w.Code != 200 || w.Body.String() != "轻量" {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		delete(m.Targets, key)
+	}
+	rows, err := f.releases(context.Background(), "github", f.cfg.GithubRepo, "helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.http.Transport = roundFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fmt.Sprintf("%x  %s\n", sha256.Sum256([]byte("传统程序")), standard)))}, nil
+	})
+	if _, _, err = f.component(context.Background(), rows, "helper", "github"); err == nil {
+		t.Fatal("错误地用传统包摘要放行轻量包")
 	}
 }
 func TestFallbackAndStale(t *testing.T) {
@@ -453,6 +496,39 @@ func TestSelectHighestCompleteRelease(t *testing.T) {
 	sums := checksums([]byte(h + "  *with space.zip\r\n"))
 	if sums["with space.zip"] != h {
 		t.Fatal("未保留文件名空格")
+	}
+}
+
+func TestPureLightProgramRelease(t *testing.T) {
+	f, _ := fixture(t, "")
+	light := "ielts-helper-light-4.1.0.zip"
+	body := []byte("pure-light-payload")
+	h := sha256.Sum256(body)
+	sumBytes := []byte(fmt.Sprintf("%x  %s\n", h, light))
+	f.http.Transport = roundFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/checksums.txt") {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(sumBytes)))}, nil
+		}
+		return nil, fmt.Errorf("unexpected url: %s", r.URL.String())
+	})
+	rel := release{
+		Tag:       "v4.1.0",
+		Published: "2026-11-24T00:00:00Z",
+		Body:      "minPluginVersion: 2.0.0\nrecommendedPluginVersion: 2.0.0",
+		Assets: []asset{
+			{Name: light, ID: 11, Size: int64(len(body)), URL: "https://api.github.com/assets/" + light},
+			{Name: "checksums.txt", ID: 12, Size: int64(len(sumBytes)), URL: "https://api.github.com/assets/checksums.txt"},
+		},
+	}
+	c, targets, err := f.component(context.Background(), []release{rel}, "helper", "github")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Version != "4.1.0" || c.Asset == nil || c.Asset.Filename != "ielts-helper-4.1.0.zip" || c.Asset.URL != "/download/helper/4.1.0/ielts-helper-4.1.0.zip" {
+		t.Fatalf("纯 light 清单格式错误：%+v", c)
+	}
+	if targets["helper/4.1.0/ielts-helper-4.1.0.zip"].URL != "https://api.github.com/assets/"+light {
+		t.Fatalf("纯 light 上游映射错误：%+v", targets)
 	}
 }
 

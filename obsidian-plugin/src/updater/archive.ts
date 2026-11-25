@@ -18,45 +18,106 @@ export function checksum(text: string, name: string): string {
 }
 // 旧打包器只将整包摘要写入构建回执，不随 ZIP 生成校验文件。
 // 已核对的迁移批次按发布端回执固定；不从待安装 ZIP 本身推导可信摘要。
-const legacyBuildReceipts: Readonly<Record<string, string>> = {
-  "ielts-helper-full-3.8.0.zip":
+const legacyBuildReceipts: Readonly<Record<string, readonly string[]>> = {
+  "ielts-helper-full-3.8.0.zip": [
     "9a83ffb988e43bdc925bac1a362611e40e295e43ef5a8398b752ac272818deb9",
+    "3db9beb69f71d70b625cf2f312c4ce52ffb7aacae9ca6a36cb7cc1ceb8047273",
+  ],
 };
+
+function parseSidecarDigest(content: string, name: string): string | undefined {
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 1 && /^[a-f\d]{64}$/i.test(lines[0]))
+    return lines[0].toLowerCase();
+  const matches = lines
+    .map((l) => /^([a-f\d]{64})\s+\*?(.+?)\s*$/i.exec(l))
+    .filter((m): m is RegExpExecArray => Boolean(m && m[2] === name));
+  if (matches.length > 1) throw new UserError("校验清单记录重复");
+  if (matches.length === 1) return matches[0][1].toLowerCase();
+  return undefined;
+}
+
+/** 联合扫描旁路 .sha256 与同目录标准校验清单（含 checksums (1).txt），任何冲突均在解包前拒绝。 */
+async function findDirectoryChecksum(
+  dir: string,
+  name: string,
+): Promise<string | undefined> {
+  const found = new Set<string>();
+  const sidecar = path.join(dir, `${name}.sha256`);
+  try {
+    const info = await fs.stat(sidecar);
+    if (info.isFile()) {
+      if (info.size > 1024 * 1024) throw new UserError("校验清单过大");
+      const hit = parseSidecarDigest(await fs.readFile(sidecar, "utf8"), name);
+      if (hit) found.add(hit);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  const candidates: string[] = [];
+  try {
+    for (const entry of await fs.readdir(dir)) {
+      if (/^(?:checksums|SHA256SUMS)(?:[\s._-][^/\\]*)?(?:\.txt)?$/i.test(entry))
+        candidates.push(entry);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  for (const file of candidates) {
+    const full = path.join(dir, file);
+    const info = await fs.stat(full).catch(() => undefined);
+    if (!info?.isFile()) continue;
+    if (info.size > 1024 * 1024) throw new UserError("校验清单过大");
+    const matches = (await fs.readFile(full, "utf8"))
+      .split(/\r?\n/)
+      .map((l) => /^([a-f\d]{64})\s+\*?(.+?)\s*$/i.exec(l))
+      .filter((m): m is RegExpExecArray => Boolean(m && m[2] === name));
+    if (matches.length > 1) throw new UserError("校验清单记录重复");
+    if (matches.length === 1) found.add(matches[0][1].toLowerCase());
+  }
+  if (found.size > 1) throw new UserError("同目录多个校验清单对该文件的 SHA-256 不一致");
+  return [...found][0];
+}
+
 export async function localPackage(
   file: string,
   expectedSha256?: string,
 ): Promise<PackageInput> {
   const name = path.basename(file),
-    parts = /^ielts-helper-(resources-|full-)?(\d+\.\d+\.\d+)\.zip$/.exec(name);
+    parts =
+      /^(?:ielts-helper-(light-|resources-|full-)?|ielts-(resources-))(\d+\.\d+\.\d+)\.zip$/.exec(
+        name,
+      );
   if (!parts)
     throw new UserError(
-      "请选择保留原文件名的 Helper 程序包、资源包或旧版完整包",
+      "请选择保留原文件名的 Helper 程序包（含 light 包）、资源包或旧版完整包",
     );
+  const tag = parts[1] ?? parts[2];
+  const version = parts[3];
   let digest = expectedSha256?.trim();
-  if (!digest) {
-    for (const n of ["checksums.txt", "SHA256SUMS"]) {
-      try {
-        const f = path.join(path.dirname(file), n);
-        if ((await fs.stat(f)).size > 1024 * 1024)
-          throw new UserError("校验清单过大");
-        digest = checksum(await fs.readFile(f, "utf8"), name);
-        break;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-      }
+  let accepted: readonly string[] | undefined;
+  if (!digest) digest = await findDirectoryChecksum(path.dirname(file), name);
+  if (!digest && tag === "full-") {
+    const receipts = legacyBuildReceipts[name];
+    if (receipts?.length) {
+      digest = receipts[0];
+      accepted = receipts;
     }
   }
-  if (!digest && parts[1] === "full-") digest = legacyBuildReceipts[name];
   if (!digest || !/^[a-f\d]{64}$/i.test(digest))
     throw new UserError(
-      "请提供发布方 SHA-256 或同目录的 checksums.txt / SHA256SUMS",
+      "请提供发布方 SHA-256 或同目录的 checksums.txt / SHA256SUMS / .sha256",
     );
   return {
-    kind: parts[1] === "resources-" ? "resources" : "helper",
-    ...(parts[1] === "full-" ? { format: "bundle" as const } : {}),
-    version: parts[2],
+    kind: tag === "resources-" ? "resources" : "helper",
+    ...(tag === "full-" ? { format: "bundle" as const } : {}),
+    version,
     file,
     sha256: digest.toLowerCase(),
+    ...(accepted ? { acceptedSha256: accepted } : {}),
   };
 }
 const dbNames = ["content.db", "vocabulary.db", "dictation.db"];
@@ -142,8 +203,13 @@ function entryPath(entry: yauzl.Entry, pkg: PackageInput) {
     ["main.js", "styles.css", "manifest.json", "release.json"].includes(name)
   )
     return undefined;
-  if (pkg.kind === "helper" && name.split("/")[0] !== "terminal")
+  if (pkg.kind === "helper" && name.split("/")[0] !== "terminal") {
+    if (["main.js", "styles.css", "manifest.json", "release.json"].includes(name))
+      throw new UserError(
+        "程序包只允许 terminal/；这是旧启动器程序包，请改用 ielts-helper-light-<版本>.zip 或完整包 ielts-helper-full-<版本>.zip",
+      );
     throw new UserError("程序包只允许 terminal/");
+  }
   if (dir) return undefined;
   return pkg.kind === "helper" ? name : resourcePath(name);
 }
@@ -165,7 +231,11 @@ export async function unpack(
     }),
     createWriteStream(zipPath, { flags: "wx", mode: 0o600 }),
   );
-  if (hash.digest("hex") !== pkg.sha256.toLowerCase())
+  const actual = hash.digest("hex");
+  const expected = (pkg.acceptedSha256?.length ? pkg.acceptedSha256 : [pkg.sha256]).map(
+    (s) => s.toLowerCase(),
+  );
+  if (!expected.includes(actual))
     throw new UserError("ZIP SHA-256 校验失败");
   const zip = await new Promise<yauzl.ZipFile>((resolve, reject) =>
     yauzl.open(

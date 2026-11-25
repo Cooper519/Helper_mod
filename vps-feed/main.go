@@ -279,6 +279,13 @@ func candidate(r release, kind string) (string, []string) {
 			return "", nil
 		}
 	}
+	if kind == "helper" {
+		light := "ielts-helper-light-" + v + ".zip"
+		if present[light] {
+			// 同标签双格式或纯轻量包均以 light 附件自身摘要与字节交付。
+			names = []string{light}
+		}
+	}
 	for _, n := range names {
 		if !present[n] {
 			return "", nil
@@ -435,7 +442,11 @@ releasesLoop:
 			if sums[n] == "" || a.Size < 0 {
 				return Component{}, nil, errors.New("缺少有效校验和")
 			}
-			key := kind + "/" + v + "/" + n
+			filename := n
+			if kind == "helper" {
+				filename = "ielts-helper-" + v + ".zip" // 老客户端仍按冻结的清单名与路径下载。
+			}
+			key := kind + "/" + v + "/" + filename
 			out := Asset{URL: "/download/" + key, Size: a.Size, SHA: sums[n]}
 			if source == "gitee" {
 				out.URL += "?source=gitee"
@@ -443,7 +454,7 @@ releasesLoop:
 			if kind == "plugin" {
 				c.Assets[n] = out
 			} else {
-				out.Filename = n
+				out.Filename = filename
 				c.Asset = &out
 			}
 			ts[key] = target{address, credential}

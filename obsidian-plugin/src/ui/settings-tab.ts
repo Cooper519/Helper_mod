@@ -7,16 +7,34 @@ import { importLegacy } from "../config/machine-config";
 import {
   getGcmToken,
   getManifest,
+  getPackageFeed,
   readInstalled,
   compareVersions,
   type FeedManifest,
+  type PackageFeed,
 } from "../updater";
 import { resourceStatus } from "../config/resource-status";
+
+function cleanPath(value: string): string {
+  return value.trim().replace(/^"(.*)"$/, "$1").trim();
+}
+
+function cleanRepo(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\/(?:github|gitee)\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+}
 
 /** 三分区设置；草稿须显式保存，密钥只经本机配置持久化。 */
 export class HelperSettings extends PluginSettingTab {
   private draft?: MachineProfile;
-  private verified?: FeedManifest;
+  private verified?: FeedManifest | PackageFeed;
+  private localFiles: { file: string; sha256?: string }[] = [];
+  private explicitZips = "";
+  private manualSha = "";
+  private needFallbackZip = false;
   private baseline = "";
   private generation = 0;
   constructor(
@@ -31,6 +49,10 @@ export class HelperSettings extends PluginSettingTab {
     this.generation++;
     this.draft = undefined;
     this.verified = undefined;
+    this.localFiles = [];
+    this.explicitZips = "";
+    this.manualSha = "";
+    this.needFallbackZip = false;
   }
   display() {
     const generation = ++this.generation;
@@ -148,7 +170,7 @@ export class HelperSettings extends PluginSettingTab {
       );
     migration.addText((t) =>
       t.setPlaceholder("runtime-config.json 路径").onChange((v) => {
-        legacy = v.trim();
+        legacy = cleanPath(v);
       }),
     );
     migration.addButton((b) =>
@@ -258,8 +280,12 @@ export class HelperSettings extends PluginSettingTab {
         JSON.stringify(current?.updateSource) ===
         JSON.stringify(p.updateSource);
       const latest = this.verified ?? (applied ? this.helper.feed : undefined);
+      const verifiedPlugin =
+        this.verified && "plugin" in this.verified
+          ? this.verified.plugin
+          : undefined;
       const plugin =
-        this.verified?.plugin ??
+        verifiedPlugin ??
         (applied ? this.helper.pluginRelease : undefined);
       const text = (v: string, latest?: string) =>
         online ? `当前 ${v} · 最新 ${latest || "未检查"}` : `当前 ${v}`;
@@ -313,64 +339,103 @@ export class HelperSettings extends PluginSettingTab {
         });
     } else init.hidden = false;
     const offline = content.createEl("details", { cls: "ielts-helper-local" });
-    offline.open = !online;
+    offline.open = !online || this.localFiles.length > 0 || Boolean(this.explicitZips);
     offline.createEl("summary", { text: "导入本地 ZIP" });
-    let localFiles: { file: string; sha256?: string }[] = [];
+    const localBaseDesc =
+      "支持 Helper 程序包（含 ielts-helper-light-X.Y.Z.zip）、资源包一起或分步导入；旧版完整包请单独选择。自动读取同目录 checksums*.txt / SHA256SUMS / .sha256，也可单包手填 SHA-256。";
+    const localDesc = () => {
+      const names = this.localFiles.map((f) =>
+        f.file ? path.basename(f.file) : "未识别路径",
+      );
+      return names.length
+        ? `已选：${names.join("、")}。${localBaseDesc}`
+        : localBaseDesc;
+    };
     const local = new Setting(offline)
       .setName("选择安装包")
-      .setDesc(
-        "程序包与资源包可一起选择；旧版完整包请单独选择。已收录的 3.8.0 完整包可直接导入，其他包请附校验清单或填写发布方 SHA-256。",
-      );
+      .setDesc(localDesc());
     const input = local.controlEl.createEl("input", {
       attr: { type: "file", accept: ".zip", multiple: "" },
     });
-    let explicitZip = "";
     input.onchange = () => {
-      const electron = require("electron") as {
-        webUtils?: { getPathForFile(file: File): string };
-      };
-      localFiles = Array.from(input.files || []).map((f) => ({
-        file:
-          electron.webUtils?.getPathForFile(f) ||
-          (f as File & { path?: string }).path ||
-          "",
-      }));
-      fallback.settingEl.hidden = !localFiles.some((f) => !f.file);
-      explicitZip = "";
+      let getPath: ((file: File) => string) | undefined;
+      try {
+        const electron = require("electron") as {
+          webUtils?: { getPathForFile(file: File): string };
+        };
+        getPath = electron.webUtils?.getPathForFile;
+      } catch {
+        getPath = undefined;
+      }
+      this.localFiles = Array.from(input.files || []).map((f) => {
+        let resolved = "";
+        try {
+          resolved = getPath?.(f) || "";
+        } catch {
+          resolved = "";
+        }
+        return {
+          file: resolved || (f as File & { path?: string }).path || "",
+        };
+      });
+      this.needFallbackZip = this.localFiles.some((f) => !f.file);
+      fallback.settingEl.hidden = !this.needFallbackZip;
+      this.explicitZips = "";
+      local.setDesc(localDesc());
     };
-    let manual = "";
     local.addText((t) =>
-      t.setPlaceholder("可选：单包 SHA-256").onChange((v) => {
-        manual = v.trim();
-      }),
+      t
+        .setValue(this.manualSha)
+        .setPlaceholder("可选：单包 SHA-256")
+        .onChange((v) => {
+          this.manualSha = v.trim();
+        }),
     );
     local.addButton((b) =>
-      b.setButtonText("导入 ZIP").onClick(
-        () =>
-          void this.helper.run(async () => {
-            const selected = explicitZip ? [{ file: explicitZip }] : localFiles;
+      b.setButtonText("导入 ZIP").onClick(async () => {
+        b.setDisabled(true);
+        try {
+          await this.helper.run(async () => {
+            const explicit = this.explicitZips
+              .split(/\r?\n/)
+              .map(cleanPath)
+              .filter(Boolean)
+              .map((file) => ({ file }));
+            const selected = explicit.length ? explicit : this.localFiles;
             if (!selected.length) throw new UserError("请先选择 ZIP 文件");
             if (selected.some((f) => !f.file))
               throw new UserError("无法读取文件位置，请在下方填写完整路径");
-            if (manual && selected.length !== 1)
+            if (this.manualSha && selected.length !== 1)
               throw new UserError("手动摘要仅支持单包导入");
             await prepare();
-            await this.helper.installLocal(
-              selected.map((f) => ({ ...f, sha256: manual || undefined })),
+            const installed = await this.helper.installLocal(
+              selected.map((f) => ({ ...f, sha256: this.manualSha || undefined })),
             );
-            if (generation === this.generation) this.display();
-          }),
-      ),
+            if (installed) {
+              this.localFiles = [];
+              this.explicitZips = "";
+              this.manualSha = "";
+              this.needFallbackZip = false;
+            }
+          });
+        } finally {
+          if (generation === this.generation) this.display();
+        }
+      }),
     );
     const fallback = new Setting(offline)
       .setName("ZIP 完整路径")
-      .setDesc("无法读取所选文件位置，请每次输入一个 ZIP 路径。")
-      .addText((t) =>
-        t.onChange((v) => {
-          explicitZip = v.trim();
-        }),
-      );
-    fallback.settingEl.hidden = true;
+      .setDesc("无法读取所选文件位置，每行输入一个 ZIP 完整路径（可同时填程序包与资源包）。");
+    const fallbackArea = fallback.controlEl.createEl("textarea", {
+      attr: {
+        placeholder: "每行一个 ZIP 完整路径，支持直接粘贴带引号的路径",
+      },
+    });
+    fallbackArea.value = this.explicitZips;
+    fallbackArea.oninput = () => {
+      this.explicitZips = fallbackArea.value;
+    };
+    fallback.settingEl.hidden = !this.needFallbackZip && !this.explicitZips;
     heading("更新源与本机路径");
     new Setting(content).setName("更新源").addDropdown((d) =>
       d
@@ -399,15 +464,23 @@ export class HelperSettings extends PluginSettingTab {
       label: string,
       secret = false,
       changed?: () => void,
+      placeholder = "",
     ) => {
       const row = new Setting(content).setName(label);
       if (key === "vpsToken")
         row.setDesc(
           "用于查询版本和下载更新，由订阅服务管理员提供。密钥只保存在本机；本地学习无需填写。",
         );
+      if (key === "githubToken" || key === "giteeToken")
+        row.setDesc(
+          "优先使用本机 Git 凭据；无可用凭据或权限不足时自动回落此处令牌。",
+        );
       row.addText((t) => {
+        if (placeholder) t.setPlaceholder(placeholder);
         t.setValue(p.updateSource[key] || "").onChange((v) => {
-          p.updateSource[key] = v;
+          const isRepo =
+            key === "githubRepo" || key === "giteeRepo" || key === "pluginRepo";
+          p.updateSource[key] = isRepo ? cleanRepo(v) : v.trim();
           changed?.();
         });
         if (secret) {
@@ -426,7 +499,13 @@ export class HelperSettings extends PluginSettingTab {
         row.setDesc(hint);
         showVersions();
       };
-      sourceText("vpsUrl", "VPS HTTPS 地址", false, changed);
+      sourceText(
+        "vpsUrl",
+        "VPS HTTPS 地址",
+        false,
+        changed,
+        "https://feed.example.com/manifest.json",
+      );
       sourceText("vpsToken", "VPS 访问密钥", true, changed);
       const row = new Setting(content).setName("订阅清单").setDesc(hint);
       row.descEl.setAttribute("aria-live", "polite");
@@ -452,13 +531,10 @@ export class HelperSettings extends PluginSettingTab {
               `插件 ${plugin.version} · Helper ${helper.version} · 资源 ${resources.version}`,
             );
           } catch (e) {
-            const msg = e instanceof Error ? e.message : "";
             show(
-              msg === "更新源返回 HTTP 401"
-                ? "401：请核对 VPS 访问密钥。"
-                : msg === "更新源返回 HTTP 502"
-                  ? "502：VPS 未取到完整 Release，请检查仓库权限与附件。"
-                  : "无法验证：请检查 HTTPS 订阅链接、密钥、证书和清单格式。",
+              e instanceof UserError
+                ? e.message
+                : "无法验证：请检查 HTTPS 订阅链接、密钥、网络代理与证书。",
             );
           } finally {
             b.setDisabled(false);
@@ -468,14 +544,59 @@ export class HelperSettings extends PluginSettingTab {
     }
     if (p.updateSource.mode === "github" || p.updateSource.mode === "gitee") {
       const provider = p.updateSource.mode;
+      let revision = 0;
+      const hint =
+        "验证只读取程序与资源 Release 列表，不下载附件。";
+      const changed = () => {
+        revision++;
+        this.verified = undefined;
+        testRow.setDesc(hint);
+        showVersions();
+      };
       sourceText(
         provider === "github" ? "githubRepo" : "giteeRepo",
         "私有仓库",
+        false,
+        changed,
+        "所有者/仓库（如 owner/ielts-helper）",
       );
       sourceText(
         provider === "github" ? "githubToken" : "giteeToken",
         "只读 Token",
         true,
+        changed,
+      );
+      const testRow = new Setting(content).setName("直连测试").setDesc(hint);
+      testRow.descEl.setAttribute("aria-live", "polite");
+      testRow.addButton((b) =>
+        b.setButtonText("测试连接").onClick(async () => {
+          const current = revision;
+          const show = (text: string) => {
+            if (current === revision && generation === this.generation)
+              testRow.setDesc(text);
+          };
+          b.setDisabled(true);
+          this.verified = undefined;
+          showVersions();
+          show("正在检查私有仓 Release…");
+          try {
+            const feed = await getPackageFeed({ ...p.updateSource }, true);
+            if (current !== revision || generation !== this.generation) return;
+            this.verified = feed;
+            showVersions();
+            show(
+              `Helper ${feed.helper.version} · 资源 ${feed.resources.version}`,
+            );
+          } catch (e) {
+            show(
+              e instanceof UserError
+                ? e.message
+                : "无法连接仓库：请检查仓库名、Token 权限与网络代理。",
+            );
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
       );
       action(
         "Git 凭据管理器",
@@ -488,12 +609,27 @@ export class HelperSettings extends PluginSettingTab {
             return;
           }
           p.updateSource[provider === "github" ? "githubToken" : "giteeToken"] =
-            token;
+            token.trim();
           new Notice("令牌已填入表单，请保存配置");
         },
       );
-      sourceText("pluginRepo", "公开插件仓库");
+      sourceText(
+        "pluginRepo",
+        "公开插件仓库",
+        false,
+        undefined,
+        "Cooper519/obsidian-ielts-helper",
+      );
     }
+    const placeholders = {
+      appRoot: "填写笔记库外的程序目录绝对路径",
+      dataDir: "填写笔记库外的数据目录绝对路径，与程序目录分开",
+      studyRoot: path.join(vault, "0-IELTS"),
+      pythonPath:
+        process.platform === "win32"
+          ? "点击右侧自动检测或填 python.exe 完整路径"
+          : "点击右侧自动检测或填 python3 完整路径",
+    };
     for (const [key, label] of [
       ["appRoot", "外部程序目录"],
       ["dataDir", "外部数据目录"],
@@ -502,9 +638,11 @@ export class HelperSettings extends PluginSettingTab {
     ] as const) {
       const row = new Setting(content).setName(label);
       row.addText((t) => {
-        t.setValue(p[key]).onChange((v) => {
-          p[key] = v;
-        });
+        t.setPlaceholder(placeholders[key])
+          .setValue(p[key])
+          .onChange((v) => {
+            p[key] = cleanPath(v);
+          });
       });
       if (key === "pythonPath")
         row.addButton((b) =>

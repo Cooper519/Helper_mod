@@ -1,4 +1,5 @@
 import { UserError } from "../user-error";
+import { ServiceStartError } from "../launcher/service-manager";
 import * as fs from "node:fs/promises";
 import * as p from "node:path";
 import { randomUUID } from "node:crypto";
@@ -11,6 +12,7 @@ import {
   type UpdatePaths,
   type ServiceHooks,
   type PackageInput,
+  type InstallResult,
   type Installed,
   type PackageFeed,
   type SourceConfig,
@@ -182,12 +184,33 @@ async function locked<T>(
     for (const f of locks.reverse()) await fs.unlink(f);
   }
 }
+async function hasResourceDbs(dataDir: string): Promise<boolean> {
+  const split = await Promise.all(
+    ["content.db", "vocabulary.db", "dictation.db"].map(async (name) =>
+      (await stat(p.join(dataDir, name)))?.isFile(),
+    ),
+  );
+  if (split.every(Boolean)) return true;
+  return Boolean((await stat(p.join(dataDir, "ielts.db")))?.isFile());
+}
+
+function isMissingDbStartError(err: unknown): boolean {
+  if (err instanceof ServiceStartError) {
+    // 仅认题库引导层明确报告缺主库；解释器不可执行、端口冲突、程序缺文件等均回滚并报错。
+    return err.reason === "exit" && err.missingBaseDb;
+  }
+  return (
+    err instanceof Error &&
+    /(?:base|active) database not found/i.test(err.message)
+  );
+}
+
 /** 程序以目录切换；资源按文件提交，不以替换数据目录的方式触碰学习库。 */
 export async function installPackages(
   paths: UpdatePaths,
   packages: PackageInput[],
   service: ServiceHooks,
-) {
+): Promise<InstallResult> {
   if (
     !packages.length ||
     (packages.some((x) => x.format === "bundle") && packages.length !== 1) ||
@@ -199,7 +222,7 @@ export async function installPackages(
   )
     throw new UserError("安装包类别重复或版本号无效");
   const { app, data } = await safeRoots(paths);
-  await locked([app, data], async () => {
+  return locked([app, data], async () => {
     if (await stat(p.join(app, "runtime-config.json")))
       throw new UserError(
         "这是旧启动器的程序目录。请在设置中选择新的外部程序目录，再安装程序；现有学习数据可以继续使用。",
@@ -302,7 +325,6 @@ export async function installPackages(
           next.resourcesVersion = pkg.version;
         }
       }
-      if (!next.version) throw new UserError("请先安装或接管 Helper 程序");
       if (hadPointer) {
         const prior = await fs.readFile(ptr);
         await pointer(app, next);
@@ -311,11 +333,31 @@ export async function installPackages(
         await pointer(app, next);
         undo.push(() => fs.unlink(ptr));
       }
+      if (!next.version) {
+        updateLog("学习资源包已落盘，等待安装 Helper 程序后启动服务");
+        return { started: false, missing: "helper" as const };
+      }
       starting = true;
-      await service.start();
-      if ((await service.state()) !== "owned")
-        throw new UserError("未能确认新服务归属，已取消激活");
-      updateLog("已激活并启动服务");
+      try {
+        await service.start();
+        if ((await service.state()) !== "owned")
+          throw new UserError("未能确认新服务归属，已取消激活");
+        updateLog("已激活并启动服务");
+        return { started: true };
+      } catch (startError) {
+        // 仅在首次分步仅装 Helper、数据目录确无题库且确因缺库退出时保留程序；解释器/端口故障正常回滚并报错。
+        if (
+          !old.version &&
+          !stopped &&
+          isMissingDbStartError(startError) &&
+          !(await hasResourceDbs(data))
+        ) {
+          if ((await service.state()) === "owned") await service.stop();
+          updateLog("Helper 程序已落盘，等待安装学习资源包后启动服务");
+          return { started: false, missing: "resources" as const };
+        }
+        throw startError;
+      }
     } catch (error) {
       try {
         if (starting && (await service.state()) === "owned")
@@ -342,7 +384,7 @@ export async function installFromFeed(
   manifest: PackageFeed,
   kinds: Kind[],
   service: ServiceHooks,
-) {
+): Promise<InstallResult> {
   if (!kinds.length || new Set(kinds).size !== kinds.length)
     throw new UserError("请选择要安装的程序或资源包");
   const owner = await service.state();
@@ -352,15 +394,17 @@ export async function installFromFeed(
   const collect = async (
     index: number,
     packages: PackageInput[],
-  ): Promise<void> => {
+  ): Promise<InstallResult> => {
     if (index === kinds.length)
       return installPackages(paths, packages, service);
-    await withDownloadedPackage(source, manifest, kinds[index], (pkg) =>
-      collect(index + 1, [...packages, pkg]),
-    );
+    let result: InstallResult | undefined;
+    await withDownloadedPackage(source, manifest, kinds[index], async (pkg) => {
+      result = await collect(index + 1, [...packages, pkg]);
+    });
+    return result!;
   };
   try {
-    await collect(0, []);
+    return await collect(0, []);
   } catch (e) {
     if (
       !(e instanceof RecoveryIncomplete) &&

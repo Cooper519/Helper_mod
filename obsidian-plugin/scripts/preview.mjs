@@ -61,11 +61,11 @@ await build({
             args.path === "resources"
               ? 'export async function resourceStatus(){return ["content.db","vocabulary.db","dictation.db","learning-progress.db"].map(name=>({name,present:true}))}'
               : args.path === "updater"
-                ? 'export async function readInstalled(){return {version:"4.0.0",resourcesVersion:"1.2.3",previousVersion:"3.9.0"}};export async function getGcmToken(){return undefined};export async function getManifest(){return {plugin:{version:"2.1.0"},helper:{version:"4.0.0"},resources:{version:"1.2.3"}}};export const compareVersions=()=>0;'
+                ? 'export async function readInstalled(){return {version:"4.0.0",resourcesVersion:"1.2.3",previousVersion:"3.9.0"}};export async function getGcmToken(){return undefined};export async function getManifest(){return {plugin:{version:"2.1.0"},helper:{version:"4.0.0"},resources:{version:"1.2.3"}}};export async function getPackageFeed(){return {helper:{version:"4.0.0"},resources:{version:"1.2.3"}}};export const compareVersions=()=>0;'
                 : args.path === "config"
                   ? 'export async function importLegacy(){throw Error("视觉夹具不读本机文件")};export function assertIsolatedPath(){}'
                   : args.path === "node:path"
-                    ? 'export default {join:(...x)=>x.join("/")}'
+                    ? 'export default {join:(...x)=>x.join("/"),basename:(s)=>String(s).split(/[\\\\/]/).pop()||""}'
                     : 'export const promises={access:async()=>{throw Error("视觉夹具不读本机文件")}}',
           loader: "js",
         }));

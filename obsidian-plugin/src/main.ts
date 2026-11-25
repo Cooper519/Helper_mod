@@ -24,6 +24,7 @@ export default class IELTSPlugin extends Plugin {
   pluginRelease?: Awaited<ReturnType<typeof updater.getPluginRelease>>;
   private status!: HTMLElement;
   private busy = false;
+  private saving = false;
   private routeBusy = false;
   private alive = true;
   private onboarding?: OnboardingModal;
@@ -158,17 +159,34 @@ export default class IELTSPlugin extends Plugin {
   }
   async save(p: MachineProfile) {
     validateProfile(p);
-    if (this.service && (await this.service.state()) !== "stopped")
-      throw new UserError("修改配置前请先停止服务；外部服务需手动停止");
-    const persisted = !!(await updater.readInstalled(p.appRoot)).version;
-    if (persisted) await this.config.save(p);
-    this.service?.dispose();
-    this.profile = structuredClone(p);
-    this.service = new ServiceManager(this.profile, this.manifest.version);
-    this.feed = undefined;
-    this.pluginRelease = undefined;
-    log(persisted ? "本机配置已保存" : "首次安装配置已暂存");
-    return persisted;
+    if (this.busy)
+      throw new UserError("正在执行安装或更新，请等待完成后再保存配置");
+    if (this.saving) throw new UserError("正在保存配置，请稍候");
+    this.saving = true;
+    const prev = this.service;
+    let locked = false;
+    try {
+      // 持有存活/启动中的自有子进程时即使健康检查暂未响应也不得关闭其 stdin；真外部端口占用允许改配。
+      if (prev && (prev.hasOwnedProcess() || (await prev.state()) === "owned"))
+        throw new UserError("修改配置前请先停止当前学习服务");
+      // await 结束后再次确认未进入安装/更新，并同步锁定旧管理器阻断写盘期间并发 start()。
+      if (this.busy)
+        throw new UserError("正在执行安装或更新，请等待完成后再保存配置");
+      prev?.beginReplace();
+      locked = Boolean(prev);
+      const persisted = !!(await updater.readInstalled(p.appRoot)).version;
+      if (persisted) await this.config.save(p);
+      prev?.dispose();
+      this.profile = structuredClone(p);
+      this.service = new ServiceManager(this.profile, this.manifest.version);
+      this.feed = undefined;
+      this.pluginRelease = undefined;
+      log(persisted ? "本机配置已保存" : "首次安装配置已暂存");
+      return persisted;
+    } finally {
+      if (locked) prev?.endReplace();
+      this.saving = false;
+    }
   }
   async openStudy(vocabulary = false) {
     await this.needService().start();
@@ -279,6 +297,7 @@ export default class IELTSPlugin extends Plugin {
     await this.refreshStatus();
   }
   async exclusive(action: () => Promise<void>) {
+    if (this.saving) throw new UserError("正在保存配置，请稍候重试");
     if (this.busy) throw new UserError("正在执行另一项安装或更新");
     this.busy = true;
     const progress = new Notice("正在校验并执行操作，请勿关闭 Obsidian…", 0);
@@ -307,19 +326,29 @@ export default class IELTSPlugin extends Plugin {
       const feed = await updater.getPackageFeed(p.updateSource, true);
       if (!(await updater.readInstalled(p.appRoot)).version)
         await ensureStudyLayout(p);
-      await updater.installFromFeed(
+      const result = await updater.installFromFeed(
         this.paths(),
         p.updateSource,
         feed,
         kinds,
         this.needService(),
       );
-      await this.config.save(p);
-      new Notice("安装完成，学习服务已就绪");
-      if (p.openBrowserOnStart) await this.openStudy();
+      this.feed = feed;
+      if (result.started) {
+        await this.config.save(p);
+        this.onboarding?.close();
+        this.onboarding = undefined;
+        new Notice("安装完成，学习服务已就绪");
+        if (p.openBrowserOnStart) await this.openStudy();
+      } else if (result.missing === "resources") {
+        await this.config.save(p);
+        new Notice("Helper 程序已安装，当前数据目录缺少题库，请继续安装学习资源包");
+      } else {
+        new Notice("学习资源包已安装，请继续安装 Helper 程序后启动服务");
+      }
     });
   }
-  async installLocal(files: { file: string; sha256?: string }[]) {
+  async installLocal(files: { file: string; sha256?: string }[]): Promise<boolean> {
     if (!files.length) throw new UserError("请选择本地 ZIP");
     if (
       !(await ConfirmModal.ask(
@@ -330,18 +359,32 @@ export default class IELTSPlugin extends Plugin {
           : "请先保存当前练习。确认后会校验安装包并重启学习服务。",
       ))
     )
-      return;
+      return false;
     await this.exclusive(async () => {
       const packages = await Promise.all(
         files.map((f) => updater.localPackage(f.file, f.sha256)),
       );
       if (!(await updater.readInstalled(this.needProfile().appRoot)).version)
         await ensureStudyLayout(this.needProfile());
-      await updater.installPackages(this.paths(), packages, this.needService());
-      await this.config.save(this.needProfile());
-      new Notice("本地安装完成，学习服务已就绪");
-      if (this.needProfile().openBrowserOnStart) await this.openStudy();
+      const result = await updater.installPackages(
+        this.paths(),
+        packages,
+        this.needService(),
+      );
+      if (result.started) {
+        await this.config.save(this.needProfile());
+        this.onboarding?.close();
+        this.onboarding = undefined;
+        new Notice("本地安装完成，学习服务已就绪");
+        if (this.needProfile().openBrowserOnStart) await this.openStudy();
+      } else if (result.missing === "resources") {
+        await this.config.save(this.needProfile());
+        new Notice("Helper 程序已安装，当前数据目录缺少题库，请继续导入学习资源包");
+      } else {
+        new Notice("学习资源包已安装，请继续导入 Helper 程序包后启动服务");
+      }
     });
+    return true;
   }
   async rollback() {
     if (

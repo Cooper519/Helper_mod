@@ -2,15 +2,15 @@
 
 一个订阅地址管三项更新：**Obsidian 插件、IELTS Helper 程序、学习资源包**。VPS 提供版本清单并转发下载，Python 学习服务和题库仍在你的电脑上。已有订阅地址和访问密钥，无需自己搭 VPS。
 
-**先用临时 Vault 试装。** 本仓提供 [Obsidian 插件](obsidian-plugin/README.md)、[本地试用包](obsidian-plugin/dist/ielts-helper-obsidian-2.0.0-local.zip)和 [VPS 订阅服务](vps-feed/deploy/README.md)。不含 Python 主程序、题库、学习记录或订阅凭据。没有可用 Release 时，直接用下文的本地安装方式。
+**先用临时 Vault 试装。** 本仓提供 [Obsidian 插件](obsidian-plugin/README.md)、[本地试用包](obsidian-plugin/dist/ielts-helper-obsidian-2.0.1-local.zip)和 [VPS 订阅服务](vps-feed/deploy/README.md)。不含 Python 主程序、题库、学习记录或订阅凭据。没有可用 Release 时，直接用下文的本地安装方式。
 
 ## 在 Obsidian 安装插件
 
 使用 **Obsidian 桌面版 1.5.0+**，先打开一个空的临时 Vault。
 
-**现在试用：本地三文件。** 将[本地试用包](obsidian-plugin/dist/ielts-helper-obsidian-2.0.0-local.zip)解压到临时 Vault 的 `.obsidian/plugins/` 下，使 `main.js`、`manifest.json`、`styles.css` 位于同一个 `ielts-helper/` 子目录。重开该 Vault，在「设置 → 第三方插件」中启用 **IELTS Helper**。若从源码构建，在 `obsidian-plugin` 目录运行 `npm ci`、`npm run build`，再复制这三个文件即可。
+**现在试用：本地三文件。** 将[本地试用包](obsidian-plugin/dist/ielts-helper-obsidian-2.0.1-local.zip)解压到临时 Vault 的 `.obsidian/plugins/` 下，使 `main.js`、`manifest.json`、`styles.css` 位于同一个 `ielts-helper/` 子目录。重开该 Vault，在「设置 → 第三方插件」中启用 **IELTS Helper**。若从源码构建，在 `obsidian-plugin` 目录运行 `npm ci`、`npm run build`，再复制这三个文件即可。
 
-**发布后：用 GitHub 链接导入。** 等[独立插件仓的 Releases](https://github.com/Cooper519/obsidian-ielts-helper/releases) 出现稳定版，并确认附件含上述三个文件；维护者还需附 `checksums.txt` 或 `SHA256SUMS` 供订阅更新校验。
+**从 GitHub 安装正式版。** [独立插件仓的 Releases](https://github.com/Cooper519/obsidian-ielts-helper/releases)用于正式分发。要试用本仓的第二台电脑安装修复，请用上方的本地 ZIP：订阅只升级到更高版本，不会用同为 2.0.1 的试用包替换已安装的插件。新设备如需正式版，可以用 BRAT：
 
 1. 在「设置 → 第三方插件 → 浏览」搜索 **BRAT**，安装并启用。
 2. 在 BRAT 设置点 **添加 Beta 插件**，粘贴下面这个**仓库主页**，选定已发布的稳定版本，点 **添加插件**。公开插件无需填写 GitHub Token。
@@ -39,11 +39,11 @@
 
 在「设置 → IELTS Helper」中，选择 Vault 外两个互不包含的**新目录**作为「外部程序目录」和「外部数据目录」，学习目录先保留临时 Vault 下的 `0-IELTS`。选择本机 Python 3.8+ 解释器和一个空闲端口；本次试用不点「接管旧安装」。
 
-- **有本地包**：更新源选「仅本地 ZIP」。把程序 ZIP、资源 ZIP 和对应的 `checksums.txt` 放在同一目录，保留原文件名；在「导入本地 ZIP」中同时选择两个 ZIP，点「导入 ZIP」并确认。无需公开 Release 或 VPS。
+- **有本地包**：更新源选「仅本地 ZIP」。保留程序和资源 ZIP 的原文件名，把发布方的校验清单放在同一目录；两份 `checksums.txt` 重名时，保留浏览器生成的 `checksums (1).txt`，不必覆盖。可以一起导入，也可以先装其中一个，再按提示补齐另一个。无需 VPS。
 - **有旧版完整包**：单独选择 `ielts-helper-full-3.8.0.zip` 后点「导入 ZIP」。本次迁移构建已内置发布方校验值，无需改名、拆包或重载 Obsidian。其他构建请提供对应发布方的 SHA-256。
 - **有可用订阅**：测试连接后点「初始化安装」并确认。
 
-看到 Helper 与资源版本、四库均「已就绪」后，点 **打开学习页**。首次安装成功后，本机配置才会持久保存。「立即检查」只查版本；以后更新 Helper 或资源需要手动确认。
+看到 Helper 与资源版本、四库均「已就绪」后，点 **打开学习页**。「立即检查」只查版本；以后更新 Helper 或资源需要手动确认。
 
 ## 在 Linux VPS 上一键配置本地订阅服务
 
@@ -79,7 +79,7 @@ sudo journalctl -u ielts-helper-feed -n 30 --no-pager           # 启动失败�
 | Python 程序 | 私有 Helper 仓，稳定版 `vX.Y.Z` | `ielts-helper-X.Y.Z.zip` 和校验清单；正文注明最低及推荐插件版本 |
 | 学习资源 | 同一私有仓，独立的 `resources-vX.Y.Z` | `ielts-helper-resources-X.Y.Z.zip` 和校验清单；正文注明 `audioMode` |
 
-GitHub 自动生成的 *Source code (zip)*、旧 `full.zip` 或旧式单包 `.zip.sha256` 不符合此表。通知不会把旧包转换成新格式；程序和资源都按上表发布后，客户端才有可校验的下载入口。
+若同一 `vX.Y.Z` 还服务旧启动器，保留传统 `ielts-helper-X.Y.Z.zip` 及其配套附件，另加只含 `terminal/` 的 `ielts-helper-light-X.Y.Z.zip`。在 `checksums.txt` 中按 **light 文件名**列出轻量包的 SHA-256；传统包继续用原 `.zip.sha256`。只发轻量程序时，本仓的 VPS 和直连插件也支持单独的 light 附件。完整包只用于手动本地导入。不要用 GitHub 的 *Source code (zip)*、传统程序或旧摘要代替轻量附件。
 
 ### 让 GitHub 发布后自动刷新订阅
 

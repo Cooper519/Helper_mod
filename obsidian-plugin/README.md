@@ -1,6 +1,6 @@
 # IELTS Helper 独立 Obsidian 插件
 
-插件版本为 **2.0.0**。构建只分发 `main.js`、`manifest.json`、`styles.css`；Python 程序和学习数据位于 Vault 外。
+插件版本为 **2.0.1**。GitHub 直连遇到同一版本的传统包与轻量包时，下载并校验轻量包。插件只分发 `main.js`、`manifest.json`、`styles.css`；Python 程序和学习数据位于 Vault 外。
 
 ## 用一个订阅地址更新三项内容
 
@@ -18,6 +18,8 @@ npm run build
 npm run audit:css
 # 生成本地试用 ZIP（先构建，再封装三文件）
 npm run pack:local
+# 生成公开 Release 所需的四个附件，不创建标签、不上传
+npm run pack:release
 ```
 
 `yauzl` 及其类型是构建依赖。esbuild 将 ZIP 库及其依赖打入 `main.js`；外部引用只有 Obsidian、Electron 和 Node 内置模块。`build-meta.json` 可检查产物导入图。
@@ -38,7 +40,7 @@ IELTS_HELPER_LEGACY_CONFIG=<临时根>/legacy/runtime-config.json
 
 1. 在「更新源与本机路径」填写 `<临时根>/app`、`<临时根>/data`、`<临时Vault>/0-IELTS`、Python 完整路径与独立端口。可选择「仅本地 ZIP」，避免在线请求。
 2. 在线初始化选择「初始化安装」；本地初始化同时选择官方命名的程序和资源 ZIP，并附带同目录 `checksums.txt` / `SHA256SUMS`。新版 Electron 使用 `webUtils.getPathForFile` 取得多选文件路径；无法取得文件路径时才显示手动路径输入。旧版 `ielts-helper-full-<版本>.zip` 单独导入；已收录的 3.8.0 构建可直接选择，其他构建需同目录校验清单或手填发布方 SHA-256。
-3. 用户确认后才开始安装。首次安装会建立最小学习布局；服务健康就绪后才保存本机配置。失败时保留内存草稿，可修改后重试。
+3. 用户确认后才开始安装。可以分两次导入：先装资源，插件会提示补程序；先装程序且仅缺题库，插件会保留程序并保存本机配置，提示补资源。两者都就绪后可打开学习页。
 
 「保存本机配置」在首次安装前只应用草稿；已有安装的配置保存要求服务已停止。凭据和本机绝对路径不写插件 `data.json`。本机配置按 Vault 路径哈希隔离，并防止配置根经 junction 进入 Vault。
 

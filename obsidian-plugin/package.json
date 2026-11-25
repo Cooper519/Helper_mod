@@ -1,10 +1,11 @@
 {
   "name": "obsidian-ielts-helper",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
     "pack:local": "npm run build && python scripts/pack-local.py",
+    "pack:release": "npm run build && python scripts/pack-local.py --release",
     "build": "node esbuild.config.mjs",
     "test": "tsx --import ./tests/isolation.mjs --test tests/*.test.ts",
     "audit:css": "node scripts/audit-css.mjs"

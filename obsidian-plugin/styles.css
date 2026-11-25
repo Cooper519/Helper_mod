@@ -30,6 +30,13 @@
   flex: 1 1 12em;
   box-sizing: border-box;
 }
+.ielts-helper-settings .setting-item-control textarea {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 16em;
+  min-height: 4.5em;
+  box-sizing: border-box;
+}
 .ielts-helper-settings .setting-item-control select {
   max-width: 100%;
   min-width: min(12em, 100%);

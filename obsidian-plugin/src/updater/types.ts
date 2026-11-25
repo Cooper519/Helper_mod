@@ -59,6 +59,12 @@ export interface PackageInput {
   version: string;
   file: string;
   sha256: string;
+  /** 同一旧迁移包存在多个已核对发布端回执时，允许命中任一摘要。 */
+  acceptedSha256?: readonly string[];
+}
+export interface InstallResult {
+  started: boolean;
+  missing?: Kind;
 }
 export interface Installed {
   version?: string;

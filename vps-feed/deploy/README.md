@@ -64,6 +64,8 @@ ssh -t root@你的VPS /opt/ielts-helper-feed/set-github-token
 
 ## Release 格式
 
+已有传统用户的 `vX.Y.Z` 不要替换原程序 ZIP。在同一 Release **追加** `ielts-helper-light-X.Y.Z.zip`（轻量构建，只含 `terminal/`），校验清单中的文件名必须与这个附件完全相同。原程序的 `.zip.sha256` 保留给旧启动器。支持双格式的服务优先映射 light 字节，向现有插件仍返回 `/download/helper/X.Y.Z/ielts-helper-X.Y.Z.zip`；客户端无需改订阅链接。纯轻量发布继续用下面的常规格式。
+
 插件 tag `vX.Y.Z`，附件 `main.js`、`manifest.json`、`styles.css`；程序 tag `vX.Y.Z`，附件 `ielts-helper-X.Y.Z.zip`；资源 tag `resources-vX.Y.Z`，附件 `ielts-helper-resources-X.Y.Z.zip`。每个 Release 附 `checksums.txt` 或 `SHA256SUMS`，每行 `64位SHA256  文件名`。缺失校验和拒绝出清单。Release 正文的独立行携带：
 
 ```text

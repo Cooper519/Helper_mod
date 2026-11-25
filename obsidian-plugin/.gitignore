@@ -3,3 +3,4 @@ main.js
 build-meta.json
 preview*.png
 preview-dom.html
+dist/release/
